@@ -1,8 +1,10 @@
 ﻿using Microsoft.Extensions.Options;
+using RabbitMq.Shared.Messages;
 using RabbitMq.Shared.Settings;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 using System.Text;
+using System.Text.Json;
 
 namespace RabbitMq.Consumer.Messages
 {
@@ -22,31 +24,46 @@ namespace RabbitMq.Consumer.Messages
             await QueueDeclareAsync(_channel, stoppingToken);
 
             Console.WriteLine("Waiting for messages...");
-
+            
             try
             {
                 var consumer = new AsyncEventingBasicConsumer(_channel);
                 consumer.ReceivedAsync += async (sender, eventArgs) =>
                 {
-                    byte[] body = eventArgs.Body.ToArray();
-                    string message = Encoding.UTF8.GetString(body);
-
-                    Console.WriteLine($"Received: {message}");
-
+                    var channel = ((AsyncEventingBasicConsumer)sender).Channel;
+                    
                     try
                     {
-                        await Task.Delay(1000);
-                        await ((AsyncEventingBasicConsumer)sender).Channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false);
+                        var body = eventArgs.Body.ToArray();
+                        var messageJson = Encoding.UTF8.GetString(body);
+                        var messagePayload = JsonSerializer.Deserialize<MessagePayload?>(messageJson)
+                            ?? throw new JsonException("Deserialized payload is null.");
+
+                        Console.WriteLine($"Received:\n{messagePayload}\n\n");
+
+                        await Task.Delay(1000, stoppingToken);
+
+                        await channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        await channel.BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: true);
+                    }
+                    catch (JsonException jsonEx)
+                    {
+                        Console.WriteLine($"[ERROR] Failed to deserialize message: {jsonEx.Message}");
+                        await channel.BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: false);
                     }
                     catch (Exception ex)
                     {
                         Console.WriteLine($"[ERROR] Failed to process message: {ex.Message}");
-                        await ((AsyncEventingBasicConsumer)sender).Channel.BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: false);
+                        await channel.BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: false);
                     }
-                };
-
+                }; 
+                
                 await BasicConsumeAsync(_channel, consumer, stoppingToken);
                 await Task.Delay(Timeout.Infinite, stoppingToken);
+
             }
             catch (OperationCanceledException)
             {
@@ -88,7 +105,7 @@ namespace RabbitMq.Consumer.Messages
                 cancellationToken: stoppingToken);
         }
 
-        private async Task BasicConsumeAsync(IChannel channel, IAsyncBasicConsumer consumer,  CancellationToken stoppingToken)
+        private async Task BasicConsumeAsync(IChannel channel, IAsyncBasicConsumer consumer, CancellationToken stoppingToken)
         {
             await channel.BasicConsumeAsync(
                 _rabbitMqSettings.QueueName,

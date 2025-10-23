@@ -1,7 +1,9 @@
 ﻿using Microsoft.Extensions.Options;
+using RabbitMq.Shared.Messages;
 using RabbitMq.Shared.Settings;
 using RabbitMQ.Client;
 using System.Text;
+using System.Text.Json;
 
 namespace RabbitMq.Producer.Messages
 {
@@ -22,8 +24,9 @@ namespace RabbitMq.Producer.Messages
             {
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    var message = $"Message generated, time: {DateTime.UtcNow}";
-                    var body = Encoding.UTF8.GetBytes(message);
+                    var message = new MessagePayload("Title", "Body", DateTime.UtcNow);
+                    var serializedMessage = JsonSerializer.Serialize(message);
+                    var body = Encoding.UTF8.GetBytes(serializedMessage);
 
                     await channel.BasicPublishAsync(
                         exchange: string.Empty,

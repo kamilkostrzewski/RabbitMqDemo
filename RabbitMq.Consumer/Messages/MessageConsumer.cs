@@ -11,6 +11,7 @@ namespace RabbitMq.Consumer.Messages
     internal class MessageConsumer(IOptions<RabbitMqSettings> rabbitMqOptions) : BackgroundService, IDisposable
     {
         private readonly RabbitMqSettings _rabbitMqSettings = rabbitMqOptions.Value;
+        private string ExchangeName => _rabbitMqSettings.ExchangeName;
         private IConnection _connection = null!;
         private IChannel _channel = null!;
 
@@ -18,10 +19,15 @@ namespace RabbitMq.Consumer.Messages
         {
             Console.WriteLine("Message Consumer is starting...");
 
+
             var factory = CreateConnectionFactory();
             _connection = await factory.CreateConnectionAsync(stoppingToken);
             _channel = await _connection.CreateChannelAsync(cancellationToken: stoppingToken);
-            await QueueDeclareAsync(_channel, stoppingToken);
+
+            await ExchangeDeclareAsync(_channel, stoppingToken);
+            var queueDeclareResult = await QueueDeclareAsync(_channel, stoppingToken);
+            var queueName = queueDeclareResult.QueueName;
+            await QueueBindAsync(_channel, queueName, stoppingToken);
 
             Console.WriteLine("Waiting for messages...");
             
@@ -61,7 +67,7 @@ namespace RabbitMq.Consumer.Messages
                     }
                 }; 
                 
-                await BasicConsumeAsync(_channel, consumer, stoppingToken);
+                await BasicConsumeAsync(_channel, consumer, queueName, stoppingToken);
                 await Task.Delay(Timeout.Infinite, stoppingToken);
 
             }
@@ -94,29 +100,48 @@ namespace RabbitMq.Consumer.Messages
             base.Dispose();
         }
 
-        private async Task QueueDeclareAsync(IChannel channel, CancellationToken stoppingToken)
+        private ConnectionFactory CreateConnectionFactory()
         {
-            await channel.QueueDeclareAsync(
-                queue: _rabbitMqSettings.QueueName,
+            return new ConnectionFactory { HostName = _rabbitMqSettings.HostName };
+        }
+
+        private async Task ExchangeDeclareAsync(IChannel channel, CancellationToken stoppingToken)
+        {
+            await channel.ExchangeDeclareAsync(
+                exchange: ExchangeName,
+                type: ExchangeType.Fanout,
                 durable: true,
-                exclusive: false,
                 autoDelete: false,
                 arguments: null,
                 cancellationToken: stoppingToken);
         }
 
-        private async Task BasicConsumeAsync(IChannel channel, IAsyncBasicConsumer consumer, CancellationToken stoppingToken)
+        private static async Task<QueueDeclareOk> QueueDeclareAsync(IChannel channel, CancellationToken stoppingToken)
         {
-            await channel.BasicConsumeAsync(
-                _rabbitMqSettings.QueueName,
-                autoAck: false,
-                consumer,
+            return await channel.QueueDeclareAsync(
+                queue: string.Empty,
+                durable: false,
+                exclusive: true,
+                autoDelete: true,
+                arguments: null,
+                cancellationToken: stoppingToken);
+        }
+        private async Task QueueBindAsync(IChannel channel, string queueName, CancellationToken stoppingToken)
+        {
+            await channel.QueueBindAsync(
+                queue: queueName,
+                exchange: ExchangeName,
+                routingKey: string.Empty,
                 cancellationToken: stoppingToken);
         }
 
-        private ConnectionFactory CreateConnectionFactory()
+        private static async Task BasicConsumeAsync(IChannel channel, IAsyncBasicConsumer consumer, string queueName, CancellationToken stoppingToken)
         {
-            return new ConnectionFactory { HostName = _rabbitMqSettings.HostName };
+            await channel.BasicConsumeAsync(
+                queueName,
+                autoAck: false,
+                consumer,
+                cancellationToken: stoppingToken);
         }
     }
 }

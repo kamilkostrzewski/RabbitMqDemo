@@ -10,6 +10,7 @@ namespace RabbitMq.Producer.Messages
     internal class MessageProducer(IOptions<RabbitMqSettings> rabbitMqOptions): BackgroundService
     {
         private readonly RabbitMqSettings _rabbitMqSettings = rabbitMqOptions.Value;
+        private string ExchangeName => _rabbitMqSettings.ExchangeName;
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
@@ -18,7 +19,8 @@ namespace RabbitMq.Producer.Messages
             var factory = CreateConnectionFactory();
             using var connection = await factory.CreateConnectionAsync(stoppingToken);
             using var channel = await connection.CreateChannelAsync(cancellationToken: stoppingToken);
-            await QueueDeclareAsync(channel, stoppingToken);
+
+            await ExchangeDeclareAsync(channel, stoppingToken);
 
             try
             {
@@ -29,8 +31,8 @@ namespace RabbitMq.Producer.Messages
                     var body = Encoding.UTF8.GetBytes(serializedMessage);
 
                     await channel.BasicPublishAsync(
-                        exchange: string.Empty,
-                        routingKey: _rabbitMqSettings.QueueName,
+                        exchange: ExchangeName,
+                        routingKey: string.Empty,
                         mandatory: true,
                         basicProperties: new BasicProperties { Persistent = true },
                         body: body,
@@ -54,20 +56,20 @@ namespace RabbitMq.Producer.Messages
             }
         }
 
-        private async Task QueueDeclareAsync(IChannel channel, CancellationToken stoppingToken)
-        {
-            await channel.QueueDeclareAsync(
-                queue: _rabbitMqSettings.QueueName,
-                durable: true,
-                exclusive: false,
-                autoDelete: false,
-                arguments: null,
-                cancellationToken: stoppingToken);
-        }
-
         private ConnectionFactory CreateConnectionFactory()
         {
             return new ConnectionFactory { HostName = _rabbitMqSettings.HostName };
+        }
+
+        private async Task ExchangeDeclareAsync(IChannel channel, CancellationToken stoppingToken)
+        {
+            await channel.ExchangeDeclareAsync(
+                exchange: ExchangeName,
+                type: ExchangeType.Fanout,
+                durable: true,
+                autoDelete: false,
+                arguments: null,
+                cancellationToken: stoppingToken);
         }
     }
 }

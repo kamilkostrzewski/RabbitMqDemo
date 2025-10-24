@@ -19,10 +19,6 @@ namespace RabbitMq.Shared.Settings
         /// </summary>
         public required string HostName { get; init; }
 
-        /// <summary>
-        /// The specific queue name this service should connect to
-        /// (e.g., "message-processing" or "invoice-processing")
-        /// </summary>
-        public required string QueueName { get; init; }
+        public required string ExchangeName { get; init; }
     }
 }

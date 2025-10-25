@@ -1,4 +1,5 @@
 ﻿using Microsoft.Extensions.Options;
+using RabbitMq.Shared.Infrastracture.Abstraction;
 using RabbitMq.Shared.Messages;
 using RabbitMq.Shared.Settings;
 using RabbitMQ.Client;
@@ -8,10 +9,12 @@ using System.Text.Json;
 
 namespace RabbitMq.Consumer.Messages
 {
-    internal class MessageConsumer(IOptions<RabbitMqSettings> rabbitMqOptions) : BackgroundService, IDisposable
+    internal class MessageConsumer(
+        IRabbitMqConnectionProvider connectionProvider,
+        IOptions<RabbitMqSettings> rabbitMqOptions) : BackgroundService, IDisposable
     {
         private readonly RabbitMqSettings _rabbitMqSettings = rabbitMqOptions.Value;
-        private string ExchangeName => _rabbitMqSettings.ExchangeName;
+
         private IConnection _connection = null!;
         private IChannel _channel = null!;
 
@@ -19,9 +22,7 @@ namespace RabbitMq.Consumer.Messages
         {
             Console.WriteLine("Message Consumer is starting...");
 
-
-            var factory = CreateConnectionFactory();
-            _connection = await factory.CreateConnectionAsync(stoppingToken);
+            _connection = await connectionProvider.GetConnectionAsync(stoppingToken);
             _channel = await _connection.CreateChannelAsync(cancellationToken: stoppingToken);
 
             await ExchangeDeclareAsync(_channel, stoppingToken);
@@ -30,14 +31,14 @@ namespace RabbitMq.Consumer.Messages
             await QueueBindAsync(_channel, queueName, stoppingToken);
 
             Console.WriteLine("Waiting for messages...");
-            
+
             try
             {
                 var consumer = new AsyncEventingBasicConsumer(_channel);
                 consumer.ReceivedAsync += async (sender, eventArgs) =>
                 {
                     var channel = ((AsyncEventingBasicConsumer)sender).Channel;
-                    
+
                     try
                     {
                         var body = eventArgs.Body.ToArray();
@@ -65,8 +66,8 @@ namespace RabbitMq.Consumer.Messages
                         Console.WriteLine($"[ERROR] Failed to process message: {ex.Message}");
                         await channel.BasicNackAsync(eventArgs.DeliveryTag, multiple: false, requeue: false);
                     }
-                }; 
-                
+                };
+
                 await BasicConsumeAsync(_channel, consumer, queueName, stoppingToken);
                 await Task.Delay(Timeout.Infinite, stoppingToken);
 
@@ -90,30 +91,26 @@ namespace RabbitMq.Consumer.Messages
             try
             {
                 _channel?.Dispose();
-                _connection?.Dispose();
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[WARN] Error during dispose: {ex.Message}");
+                Console.WriteLine($"[WARN] Error during consumer dispose: {ex.Message}");
             }
-
-            base.Dispose();
-        }
-
-        private ConnectionFactory CreateConnectionFactory()
-        {
-            return new ConnectionFactory { HostName = _rabbitMqSettings.HostName };
+            finally
+            {
+                base.Dispose();
+            }
         }
 
         private async Task ExchangeDeclareAsync(IChannel channel, CancellationToken stoppingToken)
         {
             await channel.ExchangeDeclareAsync(
-                exchange: ExchangeName,
-                type: ExchangeType.Fanout,
-                durable: true,
-                autoDelete: false,
-                arguments: null,
-                cancellationToken: stoppingToken);
+                   exchange: _rabbitMqSettings.ExchangeName,
+                   type: ExchangeType.Fanout,
+                   durable: true,
+                   autoDelete: false,
+                   arguments: null,
+                   cancellationToken: stoppingToken);
         }
 
         private static async Task<QueueDeclareOk> QueueDeclareAsync(IChannel channel, CancellationToken stoppingToken)
@@ -126,11 +123,12 @@ namespace RabbitMq.Consumer.Messages
                 arguments: null,
                 cancellationToken: stoppingToken);
         }
+
         private async Task QueueBindAsync(IChannel channel, string queueName, CancellationToken stoppingToken)
         {
             await channel.QueueBindAsync(
                 queue: queueName,
-                exchange: ExchangeName,
+                exchange: _rabbitMqSettings.ExchangeName,
                 routingKey: string.Empty,
                 cancellationToken: stoppingToken);
         }
